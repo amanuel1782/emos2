@@ -5,7 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
-
+#include "arch.h"
+#include "platform.h"
 struct spinlock tickslock;
 uint ticks;
 
@@ -50,7 +51,50 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
+  if (r_scause() == 2) { // Illegal Instruction
+  // If process hasn't used FP yet, initialize it now
+  if (!p->fp_used && is_fp_instruction(r_stval())) {
+    
+    // 1. Mark as FP user
+    p->fp_used = 1;
+
+    // 2. Permanently enable FP hardware access in user sstatus (FS = 10 Clean)
+    enable_fp();
+
+    // 3. Clear initial FP register memory
+    memset(&p->arch.fp, 0, sizeof(p->arch.fp));
+
+    // Re-execute faulting instruction (will not trap again)
+  }
+
+  // Same logic for Vector
+  if (!p->vec_used && is_vec_instruction(r_stval())) {
+    p->vec_used = 1;
+    enable_vec();
+    // Allocate vector memory once
+    // kernel/trap.c or kernel/arch.c
+
+    if (p->arch.vec.regs == 0) {
+        uint64 vec_size = 32ULL * p->arch.vec.vlenb;
+
+        // Safety assertion: Ensure total vector size fits in 1 page
+        if (vec_size > PGSIZE) {
+            printf("arch: vector state size (%d bytes) exceeds page size\n", vec_size);
+            p->killed = 1;
+            return;
+        }
+
+        // Allocate a page
+        p->arch.vec.regs = kalloc();
+        if (p->arch.vec.regs == 0) {
+            p->killed = 1; // Out of memory
+            return;
+        }
+
+        memset(p->arch.vec.regs, 0, PGSIZE);
+    }
+  }
+}
   if(r_scause() == 8){
     // system call
 
@@ -126,8 +170,6 @@ prepare_return(void)
   x |= SSTATUS_SPIE; // enable interrupts in user mode
   w_sstatus(x);
 
-  // set S Exception Program Counter to the saved user pc.
-  w_sepc(p->trapframe->epc);
 }
 
 // interrupts and exceptions from kernel code go here via kernelvec,

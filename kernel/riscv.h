@@ -1,5 +1,9 @@
 #ifndef __ASSEMBLER__
 
+#define SSTATUS_FS_MASK  (3L << 13) // Bits 13:14
+#define SSTATUS_FS_CLEAN (2L << 13) // 0b10: On, but clean
+#define SSTATUS_VS_MASK  (3L << 9)  // Bits 9:10
+#define SSTATUS_VS_CLEAN (2L << 9)  // 0b10: On, but clean
 // which hart (core) is this?
 static inline uint64
 r_mhartid()
@@ -264,7 +268,18 @@ w_mcounteren(uint64 x)
 {
   asm volatile("csrw mcounteren, %0" : : "r" (x));
 }
-
+static inline void
+w_scounteren(uint64 x)
+{
+  asm volatile("csrw scounteren, %0" : : "r" (x));
+}
+static inline uint64
+r_scounteren()
+{
+  uint64 x;
+  asm volatile("csrr %0, scounteren" : "=r" (x));
+  return x;
+}
 static inline uint64
 r_mcounteren()
 {
@@ -272,7 +287,14 @@ r_mcounteren()
   asm volatile("csrr %0, mcounteren" : "=r" (x) );
   return x;
 }
-
+static inline uint64
+r_cycle()
+{
+  uint64 x;
+  // Use "cycle" for user/supervisor mode, or "mcycle" for machine mode
+  asm volatile("csrr %0, cycle" : "=r"(x));
+  return x;
+}
 // machine-mode cycle counter
 static inline uint64
 r_time()
@@ -280,6 +302,12 @@ r_time()
   uint64 x;
   asm volatile("csrr %0, time" : "=r" (x) );
   return x;
+}
+static inline uint64 instructions_retired(void)
+{
+    uint64 x;
+    asm volatile("csrr %0, instret" : "=r"(x));
+    return x;
 }
 
 // enable device interrupts

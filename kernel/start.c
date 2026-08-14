@@ -3,7 +3,14 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "defs.h"
+// Counter enable bits (mcounteren/scounteren)
+#define COUNTEREN_CYCLE    (1UL << 0)
+#define COUNTEREN_TIME     (1UL << 1)
+#define COUNTEREN_INSTRET  (1UL << 2)
 
+#define COUNTEREN_ALL (COUNTEREN_CYCLE | \
+                        COUNTEREN_TIME | \
+                        COUNTEREN_INSTRET)
 void main();
 void timerinit();
 
@@ -19,7 +26,6 @@ start()
   x &= ~MSTATUS_MPP_MASK;
   x |= MSTATUS_MPP_S;
   w_mstatus(x);
-
   // set M Exception Program Counter to main, for mret.
   // requires gcc -mcmodel=medany
   w_mepc((uint64)main);
@@ -47,20 +53,39 @@ start()
   // switch to supervisor mode and jump to main().
   asm volatile("mret");
 }
-
 // ask each hart to generate timer interrupts.
+// Ask each hart to generate timer interrupts.
 void
-timerinit()
+timerinit(void)
 {
-  // enable supervisor-mode timer interrupts.
+  // Enable Supervisor-mode timer interrupts.
   w_mie(r_mie() | MIE_STIE);
-  
-  // enable the sstc extension (i.e. stimecmp).
-  w_menvcfg(r_menvcfg() | (1L << 63)); 
-  
-  // allow supervisor to use stimecmp and time.
-  w_mcounteren(r_mcounteren() | 2);
-  
-  // ask for the very first timer interrupt.
+
+  // Enable the Sstc extension (Supervisor Timer Compare).
+  w_menvcfg(r_menvcfg() | (1UL << 63));
+
+  // Allow Supervisor mode to read cycle, time, and instret.
+  w_mcounteren(r_mcounteren() | COUNTEREN_ALL);
+
+  // Allow User mode to read cycle, time, and instret directly.
+  w_scounteren(r_scounteren() | COUNTEREN_ALL);
+
+  // Schedule the first timer interrupt.
   w_stimecmp(r_time() + 1000000);
 }
+// // ask each hart to generate timer interrupts.
+// void
+// timerinit()
+// {
+//   // enable supervisor-mode timer interrupts.
+//   w_mie(r_mie() | MIE_STIE);
+  
+//   // enable the sstc extension (i.e. stimecmp).
+//   w_menvcfg(r_menvcfg() | (1L << 63)); 
+  
+//   // allow supervisor to use stimecmp and time.
+//   w_mcounteren(r_mcounteren() | 2);
+  
+//   // ask for the very first timer interrupt.
+//   w_stimecmp(r_time() + 1000000);
+// }

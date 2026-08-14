@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "arch.h"
 
 struct cpu cpus[NCPU];
 
@@ -19,12 +20,18 @@ extern void forkret(void);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
-
+extern struct cpu_arch_config g_arch;
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+// External assembly definitions
+extern void save_fp(struct fp_state *fp);
+extern void restore_fp(struct fp_state *fp);
+extern void save_vec(struct vector_state *state);
+extern void restore_vec(struct vector_state *state);
+
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -110,7 +117,7 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
-
+  
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -142,6 +149,19 @@ found:
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
+  // kernel/proc.c -> allocproc()
+
+  // kernel/proc.c -> allocproc()
+
+  // Force FS = 00 (Off) and VS = 00 (Off) in user space
+  p->trapframe->sstatus &= ~(3L << 13); // FS = Off
+  p->trapframe->sstatus &= ~(3L << 9);  // VS = Off
+
+  // Clear extended state metadata
+  memset(&p->arch.fp, 0, sizeof(p->arch.fp));
+  memset(&p->arch.vec, 0, sizeof(p->arch.vec));
+  p->arch.vec.vlenb = g_arch.vec.vlenb; // Copy probed platform vlenb
+  p->arch.vec.regs = 0;                 // Deferred allocation               // Deferred allocation
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
@@ -474,6 +494,8 @@ sched(void)
 {
   int intena;
   struct proc *p = myproc();
+  uint64 sstatus;
+  uint64 enable_mask;
 
   if(!holding(&p->lock))
     panic("sched p->lock");
@@ -484,8 +506,60 @@ sched(void)
   if(intr_get())
     panic("sched interruptible");
 
+  // =========================================================================
+  // 1. OUTGOING PROCESS: Turn ON hardware units to allow saving
+  // =========================================================================
+  enable_mask = 0;
+  if (p->fp_used)  enable_mask |= SSTATUS_FS_CLEAN;
+  if (p->vec_used) enable_mask |= SSTATUS_VS_CLEAN;
+
+  if (enable_mask) {
+    sstatus = r_sstatus();
+    w_sstatus((sstatus & ~(SSTATUS_FS_MASK | SSTATUS_VS_MASK)) | enable_mask);
+  }
+
+  // Save the registers to memory
+  if (p->vec_used)
+    save_vec(&p->arch.vec);
+  if (p->fp_used)
+    save_fp(&p->arch.fp);
+
+  // Turn OFF both units completely before giving up the CPU
+  w_sstatus(r_sstatus() & ~(SSTATUS_FS_MASK | SSTATUS_VS_MASK));
+  // =========================================================================
+
   intena = mycpu()->intena;
+
+  // CONTEXT SWITCH HAPPENS HERE
   swtch(&p->context, &mycpu()->context);
+  
+  // WE ARE NOW RUNNING THE INCOMING PROCESS!
+
+  // =========================================================================
+  // 2. INCOMING PROCESS: Turn ON hardware units to allow restoring
+  // =========================================================================
+  enable_mask = 0;
+  if (p->fp_used)  enable_mask |= SSTATUS_FS_CLEAN;
+  if (p->vec_used) enable_mask |= SSTATUS_VS_CLEAN;
+
+  if (enable_mask) {
+    sstatus = r_sstatus();
+    w_sstatus((sstatus & ~(SSTATUS_FS_MASK | SSTATUS_VS_MASK)) | enable_mask);
+  }
+
+  // Restore the registers from memory
+  if (p->fp_used) {
+    restore_fp(&p->arch.fp);
+  }
+  if (p->vec_used) {
+    // Calling your awesome new assembly directly!
+    restore_vec(&p->arch.vec); 
+  }
+  
+  // Note: We leave the units ON (in the Clean state) so that when this
+  // thread returns to user-space, it can use them without trapping.
+  // =========================================================================
+
   mycpu()->intena = intena;
 }
 

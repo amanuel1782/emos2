@@ -1,3 +1,42 @@
+// kernel/proc.h
+
+struct fp_state {
+    uint64 f[32];
+    uint32 fcsr;
+    uint32 reserved;
+};
+
+struct vector_state {
+    void   *regs;        /* 32 × vlenb bytes */
+    uint32  vlenb;
+    uint32  reserved;
+
+    uint64  vl;
+    uint64  vtype;
+    uint64  vstart;
+    uint64  vcsr;
+};
+
+struct trigger_state {
+    uint64 tdata1;
+    uint64 tdata2;
+    uint64 tdata3;
+};
+
+struct debug_state {
+    int trigger_count;
+    struct trigger_state *triggers;
+};
+
+// Option A: Embed fixed-size states directly, dynamically allocate large buffers only
+struct cpu_arch_config {
+  uint64 features;             // Bitmask: ARCH_FP_ACTIVE, ARCH_VEC_ACTIVE, etc.
+
+  struct fp_state fp;          // Embedded directly (only 264 bytes, no pointer overhead)
+  struct vector_state vec;     // Header embedded directly
+
+  struct debug_state dbg;      // Header embedded
+};
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -77,6 +116,7 @@ struct trapframe {
   /* 264 */ uint64 t4;
   /* 272 */ uint64 t5;
   /* 280 */ uint64 t6;
+  /*282*/   uint64 sstatus;
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
@@ -91,10 +131,14 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  // ... existing fields ...
+  struct cpu_arch_config arch;
 
+  uint8 fp_used;   // Has this thread ever used FP?
+  uint8 vec_used;  // Has this thread ever used Vector?
+  uint8 dbg_used;
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
-
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)

@@ -84,6 +84,25 @@ kexec(char *path, char **argv)
   // Allocate some pages at the next page boundary.
   // Make the first inaccessible as a stack guard.
   // Use the rest as the user stack.
+  // // 1. Snap the data/bss segment to the page boundary. 
+  // // We leave 'sz' here so the heap can start growing from this exact point!
+  // sz = PGROUNDUP(sz);
+
+  // // 2. Calculate the stack boundaries at the top of memory.
+  // // TRAPFRAME is a fixed address near the very top of virtual memory.
+  // uint64 stack_top = TRAPFRAME;
+  // uint64 stack_bottom = stack_top - (USERSTACK+1)*PGSIZE;
+
+  // // 3. Allocate the stack pages at the top of memory, NOT at 'sz'.
+  // if(uvmalloc(pagetable, stack_bottom, stack_top, PTE_W) == 0)
+  //   goto bad;
+
+  // // 4. Create the guard page at the very bottom of the new stack allocation.
+  // uvmclear(pagetable, stack_bottom);
+
+  // // 5. Set the Stack Pointer to the top, growing downwards.
+  // sp = stack_top;
+  // stackbase = stack_top - USERSTACK*PGSIZE;
   sz = PGROUNDUP(sz);
   uint64 sz1;
   if((sz1 = uvmalloc(pagetable, sz, sz + (USERSTACK+1)*PGSIZE, PTE_W)) == 0)

@@ -4,7 +4,11 @@
         # be placed at 0x80000000.
 .section .text
 .global _entry
+.extern kernel_dtb
 _entry:
+        # Save the DTB pointer that OpenSBI placed in a1.
+        la t0, kernel_dtb
+        sd a1, 0(t0)
         # set up a stack for C.
         # stack0 is declared in start.c,
         # with a 4096-byte stack per CPU.

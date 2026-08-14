@@ -7,7 +7,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
-
+#include "platform.h"
+#define PTE_COW (1L << 8)
 /*
  * the kernel's page table.
  */
@@ -17,6 +18,7 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+extern struct  platform platform;
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
@@ -50,6 +52,121 @@ kvmmake(void)
   
   return kpgtbl;
 }
+static int
+is_page_nomap(uint64 page_addr)
+{
+    uint64 page_end = page_addr + PGSIZE;
+
+    for (int i = 0; i < platform.reserved.count; i++)
+    {
+        if (platform.reserved.region[i].no_map)
+        {
+            uint64 res_base = platform.reserved.region[i].base;
+            uint64 res_end = res_base + platform.reserved.region[i].size;
+
+            if (page_addr < res_end && page_end > res_base)
+                return 1;
+        }
+    }
+    return 0;
+}
+// Include your PTE flags (e.g., PTE_R, PTE_W) and alignment macros
+
+void
+platform_map_devices(pagetable_t kpgtbl)
+{
+    for (int i = 0; i < platform.devices.count; i++) {
+        struct device_info *d = &platform.devices.device[i];
+
+        if (!d->map_kernel) {
+            continue;
+        }
+
+        /* Iterate through all physical memory windows for this device */
+        for (int r = 0; r < d->region_count; r++) {
+            uint64 raw_base = d->region[r].base;
+            uint64 raw_size = d->region[r].size;
+
+            /* The MMU demands page-aligned physical addresses */
+            uint64 pa = PGROUNDDOWN(raw_base);
+            
+            /* 
+             * Adjust the size to cover any offset created by rounding down 
+             * the base, then round the total size up to the next page boundary.
+             */
+            uint64 sz = PGROUNDUP(raw_size + (raw_base - pa));
+
+            /* 
+             * Map into the kernel page table. 
+             * MMIO regions must be Read/Write, but NEVER Executable (PTE_X).
+             * Note: This uses a 1:1 identity mapping (VA == PA).
+             */
+            kvmmap(kpgtbl, pa, pa, sz, PTE_R | PTE_W);
+            
+            /* Optional but highly recommended for early-boot debugging */
+            // printf("Mapped %s (Region %d): PA 0x%lx, Size 0x%lx\n", 
+            //        d->name, r, pa, sz);
+        }
+    }
+}
+
+// Make a direct-map page table for the kernel.
+pagetable_t
+kvmmakep(void)
+{
+        pagetable_t kpgtbl;
+
+        kpgtbl = (pagetable_t) kalloc();
+        memset(kpgtbl, 0, PGSIZE);
+
+        platform_map_devices(kpgtbl);
+
+        /* 
+        * 2. KERNEL TEXT
+        * Map kernel text executable and read-only.
+        */
+        kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+
+        /* 
+        * 3. DYNAMIC RAM MAPPING 
+        * Map all available physical RAM dynamically, skipping the text segment 
+        * and any hardware-reserved 'no-map' regions.
+        */
+        for (int i = 0; i < platform.memory.count; i++)
+        {
+            uint64 mem_base = platform.memory.region[i].base;
+            uint64 mem_size = platform.memory.region[i].size;
+
+            uint64 start_page = PGROUNDUP(mem_base);
+            uint64 end_page = PGROUNDDOWN(mem_base + mem_size);
+
+            for (uint64 p = start_page; p < end_page; p += PGSIZE)
+            {
+                // Skip the kernel text area (we already mapped it as RX above)
+                if (p >= KERNBASE && p < (uint64)etext)
+                    continue;
+
+                // Skip hardware-reserved memory that strictly forbids MMU mapping
+                if (is_page_nomap(p))
+                    continue;
+
+                // Map the page (Kernel Data, BSS, and all free RAM) as Read/Write
+                if (mappages(kpgtbl, p, PGSIZE, p, PTE_R | PTE_W) != 0)
+                    panic("kvmmake: mappages failed");
+            }
+        }
+
+        /* 
+        * 4. HIGH VIRTUAL MEMORY
+        * Map the trampoline for trap entry/exit to the highest virtual address.
+        */
+        kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+        // Allocate and map a kernel stack for each process.
+        proc_mapstacks(kpgtbl);
+        
+        return kpgtbl;
+      }
 
 // add a mapping to the kernel page table.
 // only used when booting.
@@ -142,6 +259,29 @@ walkaddr(pagetable_t pagetable, uint64 va)
 // va and size MUST be page-aligned.
 // Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+static int
+pte_same_mapping(pte_t pte, uint64 pa, int perm)
+{
+    if (!(pte & PTE_V))
+        return 0;
+
+    if (PTE2PA(pte) != pa)
+        return 0;
+
+    /* 
+     * Isolate V, R, W, X, U bits (0x1F).
+     * This ignores PTE_A (0x40) and PTE_D (0x80) which the 
+     * hardware may have set automatically since the first mapping.
+     */
+    int current_perms = pte & 0x1F;
+    int target_perms  = (perm | PTE_V) & 0x1F;
+
+    if (current_perms != target_perms)
+        return 0;
+
+    return 1;
+}
+
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
@@ -162,8 +302,16 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
-      panic("mappages: remap");
+        if (*pte & PTE_V) {
+
+        if (pte_same_mapping(*pte, pa, perm)) {
+            a  += PGSIZE;
+            pa += PGSIZE;
+            continue;
+        }
+
+        panic("mappages: conflicting remap");
+    }
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -172,7 +320,27 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   }
   return 0;
 }
+int
+mappage(pagetable_t pagetable, uint64 va, uint64 pa, int perm)
+{
+    pte_t *pte;
 
+    if((va % PGSIZE) != 0)
+        panic("mappage: va not aligned");
+
+    if((pa % PGSIZE) != 0)
+        panic("mappage: pa not aligned");
+
+    if((pte = walk(pagetable, va, 1)) == 0)
+        return -1;
+
+    if(*pte & PTE_V)
+        panic("mappage: remap");
+
+    *pte = PA2PTE(pa) | perm | PTE_V;
+
+    return 0;
+}
 // create an empty user page table.
 // returns 0 if out of memory.
 pagetable_t
@@ -293,6 +461,65 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+int
+uvmcopyp(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+
+    /*
+     * Only writable user pages become COW.
+     */
+    if(flags & PTE_W){
+      flags &= ~PTE_W;
+      flags |= PTE_COW;
+
+      /*
+       * Update parent's PTE too.
+       */
+      *pte = PA2PTE(pa) | flags;
+    }
+
+    /*
+     * Child shares the same physical page.
+     */
+    if(mappages(new, i, PGSIZE, pa, flags) != 0)
+      goto err;
+
+    /*
+     * Child now owns another reference.
+     */
+    kref_increment(pa);
+  }
+
+  /*
+   * Parent's writable mappings were changed to read-only.
+   */
+  sfence_vma();
+
+  return 0;
+
+err:
+  /*
+   * The exact rollback should unmap the child mappings created
+   * so far and kref_decrement() their physical pages.
+   */
+  uvmunmap(new, 0, i / PGSIZE, 0);
+
+  return -1;
+}
+
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {

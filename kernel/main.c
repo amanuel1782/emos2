@@ -3,9 +3,9 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "defs.h"
-
+#include "smoldtb.h"
+#include "arch.h"
 volatile static int started = 0;
-
 // start() jumps here in supervisor mode on all CPUs.
 void
 main()
@@ -30,6 +30,8 @@ main()
     virtio_disk_init(); // emulated hard disk
     userinit();      // first user process
     __sync_synchronize();
+    DTB_init()
+    arch_init()
     started = 1;
   } else {
     while(started == 0)

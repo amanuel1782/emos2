@@ -284,28 +284,94 @@ kfork(void)
   struct proc *p = myproc();
 
   // Allocate process.
-  if((np = allocproc()) == 0){
+  if((np = allocproc()) == 0)
     return -1;
-  }
 
-  // Copy user memory from parent to child.
+  // Copy user memory from parent to child using COW.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
   }
+
   np->sz = p->sz;
 
-  // copy saved user registers.
+  // Copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
+
+  /*
+   * Copy floating-point/vector usage state.
+   */
+  np->fp_used  = p->fp_used;
+  np->vec_used = p->vec_used;
+
+  /*
+   * FP state is embedded in struct proc.
+   * In C, assigning one struct to another (np->fp = p->fp) automatically 
+   * performs a direct copy of all internal fields. This safely copies 
+   * uint64 f[32], uint32 fcsr, and uint32 reserved in one operation.
+   */
+  if(p->fp_used){
+    np->arch.fp = p->arch.fp;
+  }
+
+  /*
+   * Vector state contains scalar metadata fields plus a pointer to
+   * the dynamically allocated vector register storage.
+   */
+  if(p->vec_used){
+    // 1. Explicitly copy all metadata/scalar fields
+    np->arch.vec.vlenb   = p->arch.vec.vlenb;
+    np->arch.vec.reserved = p->arch.vec.reserved;
+    np->arch.vec.vl       = p->arch.vec.vl;
+    np->arch.vec.vtype    = p->arch.vec.vtype;
+    np->arch.vec.vstart   = p->arch.vec.vstart;
+    np->arch.vec.vcsr     = p->arch.vec.vcsr;
+
+    /*
+     * 2. Do not inherit the parent's regs pointer (that would cause a double-free 
+     *    or corruption). Allocate an independent physical page for the child.
+     */
+    np->arch.vec.regs = kalloc();
+
+    if(np->arch.vec.regs == 0){
+      freeproc(np);
+      release(&np->lock);
+      return -1;
+    }
+
+    /*
+     * 32 vector registers, each vlenb bytes.
+     */
+    uint64 vec_size = 32ULL * p->arch.vec.vlenb;
+
+    /*
+     * Current design stores vector registers in one page.
+     */
+    if(vec_size > PGSIZE){
+      kfree(np->arch.vec.regs);
+      np->arch.vec.regs = 0;
+
+      freeproc(np);
+      release(&np->lock);
+      return -1;
+    }
+
+    /*
+     * 3. Deep copy the parent's actual vector-register memory contents 
+     *    into the child's newly allocated page.
+     */
+    memmove(np->arch.vec.regs, p->arch.vec.regs, vec_size);
+  }
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
 
-  // increment reference counts on open file descriptors.
+  // Increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
+
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
@@ -324,7 +390,6 @@ kfork(void)
 
   return pid;
 }
-
 // Pass p's abandoned children to init.
 // Caller must hold wait_lock.
 void

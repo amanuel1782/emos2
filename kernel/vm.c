@@ -20,38 +20,38 @@ extern char trampoline[]; // trampoline.S
 
 extern struct  platform platform;
 // Make a direct-map page table for the kernel.
-pagetable_t
-kvmmake(void)
-{
-  pagetable_t kpgtbl;
+// pagetable_t
+// kvmmake(void)
+// {
+//   pagetable_t kpgtbl;
 
-  kpgtbl = (pagetable_t) kalloc();
-  memset(kpgtbl, 0, PGSIZE);
+//   kpgtbl = (pagetable_t) kalloc();
+//   memset(kpgtbl, 0, PGSIZE);
 
-  // uart registers
-  kvmmap(kpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+//   // uart registers
+//   kvmmap(kpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
-  // virtio mmio disk interface
-  kvmmap(kpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+//   // virtio mmio disk interface
+//   kvmmap(kpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 
-  // PLIC
-  kvmmap(kpgtbl, PLIC, PLIC, 0x4000000, PTE_R | PTE_W);
+//   // PLIC
+//   kvmmap(kpgtbl, PLIC, PLIC, 0x4000000, PTE_R | PTE_W);
 
-  // map kernel text executable and read-only.
-  kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+//   // map kernel text executable and read-only.
+//   kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
 
-  // map kernel data and the physical RAM we'll make use of.
-  kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+//   // map kernel data and the physical RAM we'll make use of.
+//   kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
 
-  // map the trampoline for trap entry/exit to
-  // the highest virtual address in the kernel.
-  kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+//   // map the trampoline for trap entry/exit to
+//   // the highest virtual address in the kernel.
+//   kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
-  // allocate and map a kernel stack for each process.
-  proc_mapstacks(kpgtbl);
+//   // allocate and map a kernel stack for each process.
+//   proc_mapstacks(kpgtbl);
   
-  return kpgtbl;
-}
+//   return kpgtbl;
+// }
 static int
 is_page_nomap(uint64 page_addr)
 {
@@ -112,7 +112,7 @@ platform_map_devices(pagetable_t kpgtbl)
 
 // Make a direct-map page table for the kernel.
 pagetable_t
-kvmmakep(void)
+kvmmake(void)
 {
         pagetable_t kpgtbl;
 
@@ -462,7 +462,7 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
 int
-uvmcopyp(pagetable_t old, pagetable_t new, uint64 sz)
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
@@ -520,35 +520,35 @@ err:
   return -1;
 }
 
-int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
-{
-  pte_t *pte;
-  uint64 pa, i;
-  uint flags;
-  char *mem;
+// int
+// uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+// {
+//   pte_t *pte;
+//   uint64 pa, i;
+//   uint flags;
+//   char *mem;
 
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      continue;   // page table entry hasn't been allocated
-    if((*pte & PTE_V) == 0)
-      continue;   // physical page hasn't been allocated
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
-    }
-  }
-  return 0;
+//   for(i = 0; i < sz; i += PGSIZE){
+//     if((pte = walk(old, i, 0)) == 0)
+//       continue;   // page table entry hasn't been allocated
+//     if((*pte & PTE_V) == 0)
+//       continue;   // physical page hasn't been allocated
+//     pa = PTE2PA(*pte);
+//     flags = PTE_FLAGS(*pte);
+//     if((mem = kalloc()) == 0)
+//       goto err;
+//     memmove(mem, (char*)pa, PGSIZE);
+//     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+//       kfree(mem);
+//       goto err;
+//     }
+//   }
+//   return 0;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
-}
+//  err:
+//   uvmunmap(new, 0, i / PGSIZE, 1);
+//   return -1;
+// }
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
@@ -566,41 +566,90 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
+// int
+// copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+// {
+//   uint64 n, va0, pa0;
+//   pte_t *pte;
+
+//   while(len > 0){
+//     va0 = PGROUNDDOWN(dstva);
+//     if(va0 >= MAXVA)
+//       return -1;
+  
+//     pa0 = walkaddr(pagetable, va0);
+//     if(pa0 == 0) {
+//       if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
+//         return -1;
+//       }
+//     }
+
+//     pte = walk(pagetable, va0, 0);
+//     // forbid copyout over read-only user text pages.
+//     if((*pte & PTE_W) == 0)
+//       return -1;
+      
+//     n = PGSIZE - (dstva - va0);
+//     if(n > len)
+//       n = len;
+//     memmove((void *)(pa0 + (dstva - va0)), src, n);
+
+//     len -= n;
+//     src += n;
+//     dstva = va0 + PGSIZE;
+//   }
+//   return 0;
+// }
 int
-copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+copyoutp(pagetable_t pagetable, uint64 dstva,
+        char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    if(va0 >= MAXVA)
+
+    pte_t *pte = walk(pagetable, va0, 0);
+
+    if(pte == 0 || (*pte & PTE_V) == 0)
       return -1;
-  
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0) {
-      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
+
+    /*
+     * Resolve COW before writing.
+     */
+    if(*pte & PTE_COW){
+      if(cow_break(pagetable, va0) < 0)
         return -1;
-      }
+
+      /*
+       * cow_break() changed the PTE.
+       * Walk again.
+       */
+      pte = walk(pagetable, va0, 0);
+
+      if(pte == 0)
+        return -1;
     }
 
-    pte = walk(pagetable, va0, 0);
-    // forbid copyout over read-only user text pages.
-    if((*pte & PTE_W) == 0)
+    if((*pte & PTE_U) == 0)
       return -1;
-      
+
+    pa0 = PTE2PA(*pte);
+
     n = PGSIZE - (dstva - va0);
+
     if(n > len)
       n = len;
+
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
   }
+
   return 0;
 }
-
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
@@ -681,24 +730,58 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
 {
   uint64 mem;
   struct proc *p = myproc();
+  pte_t *pte;
 
-  if (va >= p->sz)
+  if(va >= p->sz)
     return 0;
+
   va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
+
+  /*
+   * Page is already mapped.
+   *
+   * A store fault on a COW page can be resolved by breaking COW.
+   */
+  if(ismapped(pagetable, va)){
+    if(read == 0){
+      if(cow_break(pagetable, va) == 0){
+        pte = walk(pagetable, va, 0);
+
+        if(pte != 0 && (*pte & PTE_V))
+          return PTE2PA(*pte);
+      }
+    }
+
+    /*
+     * Already mapped but fault cannot be resolved:
+     *   - read fault on a non-readable page
+     *   - write fault on a non-COW read-only page
+     *   - cow_break() failed
+     */
     return 0;
   }
-  mem = (uint64) kalloc();
+
+  /*
+   * Page is not mapped.
+   * Allocate a new zero-filled page.
+   *
+   * kalloc() gives this physical page refcount = 1.
+   */
+  mem = (uint64)kalloc();
+
   if(mem == 0)
     return 0;
-  memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
+
+  memset((void *)mem, 0, PGSIZE);
+
+  if(mappages(pagetable, va, PGSIZE, mem,
+              PTE_W | PTE_U | PTE_R) != 0){
     kfree((void *)mem);
     return 0;
   }
+
   return mem;
 }
-
 int
 ismapped(pagetable_t pagetable, uint64 va)
 {

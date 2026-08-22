@@ -175,12 +175,48 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  /*
+   * Free user trapframe.
+   */
   if(p->trapframe)
-    kfree((void*)p->trapframe);
+    kfree((void *)p->trapframe);
+
   p->trapframe = 0;
+
+  /*
+   * Free user page table and drop COW references.
+   */
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+
   p->pagetable = 0;
+
+  /*
+   * Free dynamically allocated vector register state.
+   *
+   * FP state is embedded directly in struct proc, so there
+   * is nothing to kfree() for p->arch.fp.
+   */
+  if(p->arch.vec.regs){
+    kfree(p->arch.vec.regs);
+    p->arch.vec.regs = 0;
+  }
+
+  /*
+   * Clear architectural extended-state metadata.
+   */
+  memset(&p->arch.fp, 0, sizeof(p->arch.fp));
+  memset(&p->arch.vec, 0, sizeof(p->arch.vec));
+
+  /*
+   * Reset usage flags.
+   */
+  p->fp_used = 0;
+  p->vec_used = 0;
+
+  /*
+   * Reset process state.
+   */
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -190,7 +226,6 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->state = UNUSED;
 }
-
 // Create a user page table for a given process, with no user memory,
 // but with trampoline and trapframe pages.
 pagetable_t

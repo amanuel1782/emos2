@@ -12,11 +12,6 @@
 #define REFCOUNTS_PER_PAGE (PGSIZE / sizeof(uint64))
 #define REF_COUNT_MAX_PAGES 10
 
-void kref_set(uint64 pa, uint64 value);
-int kref_decrement(uint64 pa);
-int
-cow_break(pagetable_t pagetable, uint64 va);
-
 struct {
     struct spinlock lock;
     uint64 *pages[REF_COUNT_MAX_PAGES];
@@ -75,8 +70,44 @@ enum device_type {
     DEV_SD,
     DEV_CLINT,
 };
+struct irq_resource
+{
+    uint32 irq;
+    uint32 flags;
+
+    struct irq_controller *controller;
+};
+
+struct gpio_resource
+{
+    uint32 pin;
+    uint32 flags;
+
+    struct gpio_controller *controller;
+};
+
+struct clock_resource
+{
+    uint32 id;
+    void *provider;
+};
+
+struct reset_resource
+{
+    uint32 id;
+    void *provider;
+};
+
+struct dma_resource
+{
+    uint32 channel;
+    void *controller;
+};
+
+
 struct device_info
 {
+    /* Device identity */
     enum device_type type;
 
     dtb_node *node;
@@ -84,6 +115,7 @@ struct device_info
     char name[64];
     char compatible[64];
 
+    /* Device mapping */
     int map_kernel;
 
     /* MMIO resources */
@@ -92,21 +124,27 @@ struct device_info
 
     /* Interrupt resources */
     int irq_count;
-    uint32 irq[MAX_INTERRUPTS];
+    struct irq_resource irq[MAX_INTERRUPTS];
 
     /* Clock resources */
     int clock_count;
-    uint32 clock[MAX_CLOCKS];
+    struct clock_resource clock[MAX_CLOCKS];
 
     /* Reset resources */
     int reset_count;
-    uint32 reset[MAX_RESETS];
+    struct reset_resource reset[MAX_RESETS];
 
     /* DMA resources */
     int dma_count;
-    uint32 dma[MAX_DMA_CHANNELS];
-};
+    struct dma_resource dma[MAX_DMA_CHANNELS];
 
+    /* GPIO resources */
+    int gpio_count;
+    struct gpio_resource gpio[MAX_GPIO];
+
+    /* Driver private data */
+    void *driver_data;
+};
 struct cpu_info {
 
     uint32 hartid;
@@ -161,5 +199,23 @@ struct platform {
         struct device_info device[PLATFORM_MAX_DEVICES];
     } devices;
 };
-
+void device_iomap()
+void device_get_irq()
+void device_request_irq()
+void device_clock_enable()
+void device_clock_get_rate()
+void device_reset_assert()
+void device_reset_deassert()
+void device_dma_request()
+void device_get_gpio()
+void device_property_read_u32()
+void platform_read_reg()
+void platform_read_interrupts()
+void platform_read_clocks()
+void platform_read_resets()
+void platform_read_dmas()
+void platform_read_gpios()
+void kref_set(uint64 pa, uint64 value);
+int kref_decrement(uint64 pa);
+int cow_break(pagetable_t pagetable, uint64 va);
 #endif
